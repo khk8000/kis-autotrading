@@ -1,14 +1,25 @@
+# Web Server & Real-time Communication
 flask
 flask-socketio
 eventlet
+
+# Environment & Infrastructure
 python-dotenv
+schedule
+
+# Data Science & Math
 requests
 pandas
 numpy
+pymysql
+
+# Machine Learning & Deep Learning
 scikit-learn
 keras
 tensorflow
+lime
+
+# Visualization & Test
 matplotlib
 seaborn
-pymysql
 pytest

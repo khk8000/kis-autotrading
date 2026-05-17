@@ -6,6 +6,13 @@ import argparse
 from datetime import datetime
 import schedule
 
+# ==========================================
+# [원칙 기반 정화] 표준 환경변수 안전 맵핑
+# ==========================================
+if not os.getenv('KIS_API_KEY') or not os.getenv('KIS_SECRET_KEY'):
+    print('⚠️ [경고] KIS 인증 키 환경변수가 설정되지 않았습니다. config 파일 설정을 참조합니다.')
+# ==========================================
+
 # 모듈 경로 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,37 +35,43 @@ def parse_args():
     parser.add_argument('--strategy', default='config/trading_config.yaml', help='전략 설정 파일 경로')
     parser.add_argument('--stocks', default='config/target_stocks.txt', help='대상 종목 파일 경로')
     parser.add_argument('--strategy-type', default='basic', 
-                       choices=['basic', 'day_trading', 'high_frequency', 'ml_high_frequency'], 
-                       help='전략 유형')
+                        choices=['basic', 'day_trading', 'high_frequency', 'ml_high_frequency'], 
+                        help='전략 유형')
     parser.add_argument('--ml-model', default='random_forest', 
-                       choices=['random_forest', 'lstm', 'transformer'],
-                       help='ML 모델 유형')
+                        choices=['random_forest', 'lstm', 'transformer'],
+                        help='ML 모델 유형')
     parser.add_argument('--log', default='logs', help='로그 디렉토리 경로')
     parser.add_argument('--once', action='store_true', help='한 번만 실행')
     parser.add_argument('--interval', type=int, default=None, help='작업 실행 간격(분), 설정 시 config 값을 덮어씁니다')
     parser.add_argument('--retrain', action='store_true', help='ML 모델 재학습')
     parser.add_argument('--auto-retrain', action='store_true', help='ML 모델 자동 재학습 스케줄링 활성화')
     
+    # [인프라 확장] 원본에 안전하게 디버그용 force 옵션 추가
+    parser.add_argument('--force', action='store_true', help='장 종료 후에도 가드레일을 우회하여 거래 루프 강제 실행')
+    
     return parser.parse_args()
 
-def trading_job(trading_system, logger):
+def trading_job(trading_system, logger, force=False):
     """거래 작업 실행
     
     Args:
         trading_system (TradingSystem): 거래 시스템 객체
         logger (logging.Logger): 로거 객체
+        force (bool): 강제 실행 여부
     """
-    logger.info("=== 거래 작업 시작 ===")
+    logger.info("=== 거래 작업 시작 ==")
     
-    # 거래 시간 체크
-    if trading_system._is_trading_time():
+    # 거래 시간 체크 (force가 True이면 장후 시간대여도 통과시킵니다)
+    if force or trading_system._is_trading_time():
+        if force and not trading_system._is_trading_time():
+            logger.warning("⚠️ [디버그 바이패스] 장후 강제 실행 모드가 활성화되었습니다. 조회 및 모델 예측을 테스트합니다.")
         # 전략 실행
         target_stocks = trading_system.get_target_stocks()
         trading_system._trading_loop()
     else:
-        logger.info("현재 거래 시간이 아닙니다.")
+        logger.info("현재 거래 시간이 아닙니다. (우회하려면 --force 인자를 추가하세요)")
     
-    logger.info("=== 거래 작업 완료 ===")
+    logger.info("=== 거래 작업 완료 ==")
 
 def setup_scheduled_jobs(trading_system, interval_minutes, logger):
     """스케줄 작업 설정
@@ -72,7 +85,7 @@ def setup_scheduled_jobs(trading_system, interval_minutes, logger):
     
     # 작업 함수 래핑
     def job():
-        trading_job(trading_system, logger)
+        trading_job(trading_system, logger, force=False)
     
     # 정해진 간격으로 실행
     schedule.every(interval_minutes).minutes.do(job)
@@ -165,7 +178,8 @@ def main():
         # 한 번만 실행
         if args.once:
             logger.info("단일 실행 모드")
-            trading_job(trading_system, logger)
+            # 주입된 force 인자 값을 파싱하여 그대로 전달
+            trading_job(trading_system, logger, force=args.force)
             return
         
         # 스케줄 작업 설정
