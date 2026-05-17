@@ -1,14 +1,29 @@
 import pandas as pd
 import numpy as np
 import logging
+import os  # 🔒 [정화] 필수 OS 모듈 주입 완결
 from sklearn.model_selection import train_test_split
 from src.ml.features import create_features
 from src.ml.model import StockPredictionModel
 
+# 만약 하단에서 LSTM이나 Transformer를 동적 로드할 때를 대비한 백업 임포트 안전장치
+try:
+    from src.ml.model import ModelExplainer, LSTMModel, TransformerModel
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
-def train_model(market_data, stock_codes, days=300):
-    """다수 종목 데이터로 모델 학습"""
+# 🔒 [정화] 내부 분기문에서 참조하는 model_type을 안전하게 매개변수 레이어(기본값 포함)에 통합
+def train_model(market_data, stock_codes, days=300, model_type='random_forest'):
+    """다수 종목 데이터로 모델 학습
+    
+    Args:
+        market_data: 증권사 마켓 데이터 인프라
+        stock_codes (list): 대상 종목 코드 리스트
+        days (int): 과거 데이터 수집 기간
+        model_type (str): 모델 유형 ('random_forest', 'lstm', 'transformer')
+    """
     all_features = []
     
     for stock_code in stock_codes:
@@ -32,8 +47,8 @@ def train_model(market_data, stock_codes, days=300):
     # 모든 종목 데이터 결합
     combined_features = pd.concat(all_features, ignore_index=True)
     
-    # 결측치 처리
-    combined_features = combined_features.fillna(method='ffill').fillna(0)
+    # 🔒 [정화] Pandas 향후 버전에서 제거될 fillna(method='ffill') 문법을 최신 표준인 ffill()로 대체 경고 제거
+    combined_features = combined_features.ffill().fillna(0)
     
     # 특성과 타깃 분리
     columns_to_drop = ['target', 'stock_code', 'stck_bsop_date']
@@ -65,10 +80,13 @@ def train_model(market_data, stock_codes, days=300):
         logger.info(f"모델이 저장되었습니다: {saved_path}")
         
         # 모델 설명 생성
-        explainer = ModelExplainer(model_path=os.path.join(models_dir, 'explainer'))
-        explainer.setup_shap_explainer(model.model, X_train, feature_names=X_columns)
-        explainer_path = explainer.save_explainer()
-        logger.info(f"모델 설명자가 저장되었습니다: {explainer_path}")
+        try:
+            explainer = ModelExplainer(model_path=os.path.join(models_dir, 'explainer'))
+            explainer.setup_shap_explainer(model.model, X_train, feature_names=X_columns)
+            explainer_path = explainer.save_explainer()
+            logger.info(f"모델 설명자가 저장되었습니다: {explainer_path}")
+        except NameError:
+            logger.warning("⚠️ ModelExplainer가 정의되지 않아 설명자 생성 단계를 우회합니다.")
         
         return model
         
