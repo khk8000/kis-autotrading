@@ -23,8 +23,19 @@ class KoreaInvestmentAuth(ApiClient):
             self.config = yaml.safe_load(file)['api']
         
         self.base_url = self.config['base_url']
-        self.app_key = self.config['app_key']
-        self.app_secret = self.config['app_secret']
+        
+        # ==================================================================
+        # [환경 독립형 아키텍처 완결] OS 환경변수(os.getenv) 최우선 흡수 레이어
+        # 시스템에 등록된 환경변수가 있다면 우선 채택하고, 없을 때만 YAML 백업 설정을 적용합니다.
+        # ==================================================================
+        self.app_key = os.getenv("KIS_API_KEY") or os.getenv("KIS_PAPER_KEY") or self.config.get('app_key', '')
+        self.app_secret = os.getenv("KIS_SECRET_KEY") or os.getenv("KIS_PAPER_SEC") or self.config.get('app_secret', '')
+        
+        if os.getenv("KIS_API_KEY") and os.getenv("KIS_SECRET_KEY"):
+            logger.info("🔒 [인증 모듈] OS 표준 환경변수에서 상위 인프라 보안 키(Key) 세트를 정상 흡수했습니다.")
+        else:
+            logger.warning("⚠️ [인증 모듈] 표준 환경변수가 탐지되지 않아 YAML 설정 백업 데이터로 진입합니다.")
+        # ==================================================================
         
         # 토큰 파일 경로
         token_dir = os.path.dirname(os.path.abspath(config_path))
@@ -39,11 +50,7 @@ class KoreaInvestmentAuth(ApiClient):
         self._load_token_info()
     
     def authenticate(self):
-        """인증 수행 - 액세스 토큰 발급
-        
-        Returns:
-            bool: 인증 성공 여부
-        """
+        """인증 수행 - 액세스 토큰 발급"""
         try:
             self.get_access_token(force_new=True)
             return self.access_token is not None
@@ -52,25 +59,11 @@ class KoreaInvestmentAuth(ApiClient):
             return False
     
     def get_headers(self):
-        """요청 헤더 반환
-        
-        Returns:
-            dict: API 요청 헤더
-        """
+        """요청 헤더 반환"""
         return self.get_auth_headers()
     
     def call(self, endpoint, method="GET", params=None, data=None):
-        """API 호출
-        
-        Args:
-            endpoint (str): API 엔드포인트
-            method (str, optional): HTTP 메서드 (GET, POST 등)
-            params (dict, optional): URL 파라미터
-            data (dict, optional): 요청 바디 데이터
-            
-        Returns:
-            dict: API 응답 데이터
-        """
+        """API 호출"""
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         headers = self.get_auth_headers(include_hashkey=(data is not None), body=data)
         
@@ -108,7 +101,6 @@ class KoreaInvestmentAuth(ApiClient):
                     
                     logger.info("토큰 정보를 파일에서 로드했습니다.")
                     
-                    # 토큰 유효성 검증
                     current_time = time.time()
                     if self.token_expired_at and current_time >= self.token_expired_at:
                         logger.info("로드한 토큰이 만료되었습니다.")
@@ -116,7 +108,6 @@ class KoreaInvestmentAuth(ApiClient):
                         self.token_expired_at = None
             except Exception as e:
                 logger.error(f"토큰 정보 로드 중 오류 발생: {str(e)}")
-                # 오류 발생 시 토큰 정보 초기화
                 self.access_token = None
                 self.token_issued_at = None
                 self.token_expired_at = None
@@ -130,7 +121,6 @@ class KoreaInvestmentAuth(ApiClient):
         }
         
         try:
-            # 디렉토리 확인
             token_dir = os.path.dirname(self.token_file)
             os.makedirs(token_dir, exist_ok=True)
             
@@ -141,17 +131,9 @@ class KoreaInvestmentAuth(ApiClient):
             logger.error(f"토큰 정보 저장 중 오류 발생: {str(e)}")
 
     def get_access_token(self, force_new=False):
-        """액세스 토큰 발급 또는 캐시된 토큰 반환
-        
-        Args:
-            force_new (bool): 강제로 새 토큰 발급 여부
-            
-        Returns:
-            str: 액세스 토큰
-        """
+        """액세스 토큰 발급 또는 캐시된 토큰 반환"""
         current_time = time.time()
         
-        # 토큰 유효성 확인
         token_is_valid = (
             self.access_token is not None and
             not force_new and
@@ -163,7 +145,6 @@ class KoreaInvestmentAuth(ApiClient):
             logger.debug("캐시된 토큰을 사용합니다.")
             return self.access_token
         
-        # 하루에 한 번만 토큰 발급 (강제 갱신 제외)
         if self.token_issued_at and not force_new:
             issued_date = datetime.fromtimestamp(self.token_issued_at).date()
             today = datetime.now().date()
@@ -175,10 +156,8 @@ class KoreaInvestmentAuth(ApiClient):
                 else:
                     logger.warning("기존 토큰이 유효하지 않습니다. 새 토큰을 발급합니다.")
         
-        # 토큰 발급 API 엔드포인트
         url = f"{self.base_url}/oauth2/tokenP"
         
-        # 요청 헤더와 데이터
         headers = {
             "content-type": "application/json"
         }
@@ -190,19 +169,16 @@ class KoreaInvestmentAuth(ApiClient):
         }
         
         try:
-            # API 호출
             response = requests.post(url, headers=headers, data=json.dumps(data))
-            response.raise_for_status()  # 오류가 있는 경우 예외 발생
+            response.raise_for_status()
             
             token_data = response.json()
             self.access_token = token_data.get('access_token')
             
-            # 토큰 만료 시간 설정
-            expires_in = token_data.get('expires_in', 86400)  # 기본값 24시간
+            expires_in = token_data.get('expires_in', 86400)
             self.token_issued_at = current_time
-            self.token_expired_at = current_time + expires_in - 300  # 5분 여유
+            self.token_expired_at = current_time + expires_in - 300
             
-            # 토큰 정보 저장
             self._save_token_info()
             
             logger.info(f"새 액세스 토큰이 발급되었습니다. 만료 시간: {expires_in}초")
@@ -215,14 +191,7 @@ class KoreaInvestmentAuth(ApiClient):
             raise
     
     def get_hashkey(self, data):
-        """데이터로부터 해시키 생성
-        
-        Args:
-            data (dict): 해시키를 생성할 데이터
-            
-        Returns:
-            str: 생성된 해시키
-        """
+        """데이터로부터 해시키 생성"""
         url = f"{self.base_url}/uapi/hashkey"
         
         headers = {
@@ -239,20 +208,10 @@ class KoreaInvestmentAuth(ApiClient):
             return hashkey
         except requests.exceptions.RequestException as e:
             logger.error(f"해시키 생성 중 오류 발생: {str(e)}")
-            if 'response' in locals() and response:
-                logger.error(f"응답: {response.text}")
             raise
     
     def get_auth_headers(self, include_hashkey=False, body=None):
-        """인증 헤더 생성
-        
-        Args:
-            include_hashkey (bool): 해시키 포함 여부
-            body (dict): 해시키 생성에 사용할 요청 바디
-            
-        Returns:
-            dict: 인증 헤더
-        """
+        """인증 헤더 생성"""
         token = self.get_access_token()
         
         headers = {
@@ -260,7 +219,7 @@ class KoreaInvestmentAuth(ApiClient):
             "authorization": f"Bearer {token}",
             "appkey": self.app_key,
             "appsecret": self.app_secret,
-            "tr_id": "",  # 필요에 따라 설정
+            "tr_id": "",
         }
         
         if include_hashkey and body:
