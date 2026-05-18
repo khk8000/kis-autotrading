@@ -1,313 +1,130 @@
 #!/usr/bin/env python
 """
-자동 주식 거래 시스템 시작 스크립트
-
-사용법:
-    python start.py --mode [cli|web|daemon] [옵션]
-
-모드:
-    cli: 명령행 인터페이스 (기본)
-    web: 웹 인터페이스
-    daemon: 백그라운드 데몬 모드
-
-옵션:
-    --config: API 설정 파일 경로
-    --strategy-type: 사용할 전략 유형 (basic, day_trading, high_frequency, ml_high_frequency)
-    --log-level: 로그 레벨 (debug, info, warning, error)
+통합 자동 주식 거래 시스템 엔트리 포인트 (start.py)
+- [독립환경구축] 구글 코랩 및 로컬 인프라 환경을 최상단에서 자동 감지하여 단일화합니다.
+- [뗌질식 수정 금지] 하위 모듈로 내려가기 전 모든 의존성 객체를 빌드하여 주입합니다.
 """
 
+import argparse
 import os
 import sys
-import argparse
 import logging
-from pathlib import Path
-
-# 모듈 경로 추가
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from src.api.auth import KoreaInvestmentAuth
-from src.api.market_data import MarketData
-from src.api.order import OrderAPI
-from src.core.config import ConfigManager
+from src.config.config_manager import ConfigManager
 from src.core.trading_system import TradingSystem
-from src.utils.logger import setup_logger
 
-def parse_args():
-    """명령행 인자 파싱"""
-    parser = argparse.ArgumentParser(description='자동 주식 거래 시스템')
+# KIS(한국투자증권) 내부 인증 및 통신 레이어 모듈 임포트 (기존 프로젝트 구조 원본 반영)
+from src.api.kis_auth import KoreaInvestmentAuth
+from src.core.market_data import MarketData
+from src.core.order_api import OrderAPI
+
+logger = logging.getLogger(__name__)
+
+def bootstrap_environment():
+    """구글 코랩 환경 자동 감지 및 인프라 표준 환경변수 일괄 바인딩"""
+    try:
+        from google.colab import userdata
+        paper_key = userdata.get('KIS_PAPER_KEY')
+        paper_sec = userdata.get('KIS_PAPER_SEC')
+        paper_acc = userdata.get('KIS_PAPER_ACC')
+        
+        if paper_key and paper_sec:
+            os.environ["KIS_API_KEY"] = paper_key
+            os.environ["KIS_SECRET_KEY"] = paper_sec
+            os.environ["KIS_PAPER_KEY"] = paper_key
+            os.environ["KIS_PAPER_SEC"] = paper_sec
+            if paper_acc:
+                os.environ["KIS_PAPER_ACC"] = paper_acc
+            print("🔒 [인프라 브릿지] 구글 코랩 Secrets 데이터를 가상 OS 레벨 표준 환경변수로 바인딩했습니다.")
+    except (ImportError, AttributeError):
+        # 로컬 서버 또는 일반 리눅스 환경일 경우 패스
+        pass
+
+def parse_arguments():
+    """프로젝트 전체에서 유일하게 실행 인자를 제어하는 파서"""
+    parser = argparse.ArgumentParser(description='통합 자동 주식 거래 시스템')
     
-    # 필수 옵션
-    parser.add_argument('--mode', default='cli', choices=['cli', 'web', 'daemon'],
-                        help='실행 모드 (cli, web, daemon)')
-    
-    # 일반 옵션
-    parser.add_argument('--config', default='config/api_config.yaml',
-                        help='API 설정 파일 경로')
-    parser.add_argument('--strategy-type', default='basic',
-                        choices=['basic', 'day_trading', 'high_frequency', 'ml_high_frequency'],
-                        help='전략 유형')
-    parser.add_argument('--log-level', default='info',
-                        choices=['debug', 'info', 'warning', 'error'],
-                        help='로그 레벨')
-    
-    # 웹 옵션
-    parser.add_argument('--host', default='127.0.0.1',
-                        help='웹 서버 호스트 (web 모드 전용)')
-    parser.add_argument('--port', type=int, default=5000,
-                        help='웹 서버 포트 (web 모드 전용)')
+    parser.add_argument('--mode', choices=['cli', 'web', 'daemon'], default='cli',
+                        help='실행 모드 (cli: 명령행 루프, web: 웹 대시보드, daemon: 백그라운드 스레드)')
+    parser.add_argument('--strategy-type', default='basic', 
+                        help='전략 유형 (basic, day_trading, high_frequency, ml_high_frequency)')
+    parser.add_argument('--config', default='config/api_config.yaml', 
+                        help='글로벌 설정 및 API 명세 파일 경로')
+    parser.add_argument('--force', action='store_true', 
+                        help='시간 외 또는 조건 미달 시에도 거래 가드레일을 강제 바이패스')
     
     return parser.parse_args()
 
-def setup_logging(log_level='info'):
-    """로깅 설정"""
-    log_dir = os.path.abspath('logs')
-    os.makedirs(log_dir, exist_ok=True)
+def main():
+    # 1. 환경 분석 및 로깅 초기화
+    bootstrap_environment()
     
-    # 로그 레벨 매핑
-    log_levels = {
-        'debug': logging.DEBUG,
-        'info': logging.INFO,
-        'warning': logging.WARNING,
-        'error': logging.ERROR
-    }
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
-    level = log_levels.get(log_level.lower(), logging.INFO)
-    
-    # 전역 로거 설정
-    logger = logging.getLogger()
-    logger.setLevel(level)
-    
-    # 핸들러 설정
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # 콘솔 핸들러
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    
-    # 파일 핸들러
-    log_file = os.path.join(log_dir, 'system.log')
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(level)
-    file_handler.setFormatter(formatter)
-    
-    # 핸들러 추가
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-    
-    return logger
+    args = parse_arguments()
+    logger.info(f"🚀 [시스템 구동] 모드: {args.mode.upper()} | 전략 패키지: {args.strategy_type}")
 
-def initialize_system(args):
-    """시스템 초기화"""
-    logger = logging.getLogger(__name__)
-    logger.info("시스템 초기화 중...")
-    
-    # 설정 디렉토리 확인
-    config_dir = os.path.dirname(os.path.abspath(args.config))
-    os.makedirs(config_dir, exist_ok=True)
-    
-    # 설정 관리자 초기화
-    config_manager = ConfigManager(config_dir)
-    
-    # API 객체 초기화
+    # 2. 강제 실행 플래그 전역 컨텍스트 바인딩
+    if args.force:
+        os.environ["FORCE_BYPASS"] = "True"
+        logger.warning("⚠️ 전역 강제 바이패스 플래그가 설정되었습니다. 시장 외 시간 매매가 허용됩니다.")
+
     try:
-        auth = KoreaInvestmentAuth(args.config)
-        market_data = MarketData(auth, args.config)
-        order_api = OrderAPI(auth, args.config)
+        # 3. 설정 매니저 단일 원본 빌드
+        config_manager = ConfigManager(args.config)
         
-        # 액세스 토큰 발급
-        auth.get_access_token()
+        # 4. 하위 모듈이 각자 각개격파로 만들던 KIS 커넥션 객체들을 여기서 딱 한 번 정방향으로 빌드
+        # ConfigManager 혹은 OS 환경변수로부터 직접 원본 값을 파싱합니다.
+        api_key = os.environ.get("KIS_API_KEY") or config_manager.get("KIS_API_KEY")
+        secret_key = os.environ.get("KIS_SECRET_KEY") or config_manager.get("KIS_SECRET_KEY")
+        account_no = os.environ.get("KIS_PAPER_ACC") or config_manager.get("KIS_ACCOUNT_NO")
+        run_mode = config_manager.get("RUN_MODE", "paper")
         
-        # 거래 시스템 초기화
+        if not api_key or not secret_key:
+            raise ValueError("KIS API 인증 키 원본 데이터가 누락되었습니다. 환경변수나 yaml 설정을 점검하십시오.")
+            
+        # 5. 순차적 의존성 결합 (인증 -> 마켓 -> 주문)
+        auth_client = KoreaInvestmentAuth(api_key=api_key, secret_key=secret_key, mode=run_mode)
+        market_data = MarketData(auth_client=auth_client, mode=run_mode)
+        order_api = OrderAPI(auth_client=auth_client, account_no=account_no, mode=run_mode)
+        
+        # 6. 정화 완료된 TradingSystem에 무결한 원본 객체 통째로 주입 (Dependency Injection)
         trading_system = TradingSystem(
-            auth_client=auth,
+            auth_client=auth_client,
             market_data=market_data,
             order_api=order_api,
             config_manager=config_manager,
             strategy_type=args.strategy_type
         )
         
-        logger.info("시스템 초기화 완료")
-        return trading_system
-    except Exception as e:
-        logger.error(f"시스템 초기화 실패: {str(e)}")
-        raise
-
-def run_cli_mode(trading_system, args):
-    """CLI 모드 실행"""
-    logger = logging.getLogger(__name__)
-    logger.info("CLI 모드 시작")
-    
-    # 거래 시스템 시작
-    trading_system.start()
-    
-    try:
-        # 사용자 명령 처리 루프
-        while True:
-            cmd = input("\n명령어 입력 (help, status, start, stop, quit): ").strip().lower()
-            
-            if cmd == 'help':
-                print("\n사용 가능한 명령어:")
-                print("  status - 현재 시스템 상태 확인")
-                print("  start - 거래 시스템 시작")
-                print("  stop - 거래 시스템 중지")
-                print("  quit - 프로그램 종료")
-            
-            elif cmd == 'status':
-                status = trading_system.get_status()
-                print(f"\n현재 상태: {status}")
-                
-                # 보유 종목 정보
-                account_info = trading_system.get_account_info()
-                if account_info and 'stocks' in account_info:
-                    print("\n보유 종목:")
-                    for stock in account_info['stocks']:
-                        stock_code = stock.get('pdno', 'N/A')
-                        stock_name = stock.get('prdt_name', 'N/A')
-                        quantity = stock.get('hldg_qty', 0)
-                        avg_price = stock.get('pchs_avg_pric', 0)
-                        current_price = stock.get('prpr', 0)
-                        
-                        print(f"  {stock_code} ({stock_name}): {quantity}주, 평균가: {avg_price}, 현재가: {current_price}")
-            
-            elif cmd == 'start':
-                if trading_system.get_status() == 'stopped':
-                    trading_system.start()
-                    print("\n거래 시스템이 시작되었습니다.")
-                else:
-                    print("\n거래 시스템이 이미 실행 중입니다.")
-            
-            elif cmd == 'stop':
-                if trading_system.get_status() != 'stopped':
-                    trading_system.stop()
-                    print("\n거래 시스템이 중지되었습니다.")
-                else:
-                    print("\n거래 시스템이 이미 중지되었습니다.")
-            
-            elif cmd == 'quit':
-                trading_system.stop()
-                print("\n프로그램을 종료합니다.")
-                break
-            
-            else:
-                print("\n알 수 없는 명령어입니다. 'help'를 입력하여 사용 가능한 명령어를 확인하세요.")
-    
-    except KeyboardInterrupt:
-        logger.info("사용자에 의해 프로그램 종료")
-    finally:
-        # 종료 시 거래 시스템 중지
-        trading_system.stop()
-        logger.info("CLI 모드 종료")
-
-def run_web_mode(trading_system, args):
-    """웹 인터페이스 모드 실행"""
-    logger = logging.getLogger(__name__)
-    logger.info("웹 인터페이스 모드 시작")
-    
-    try:
-        # 웹 서버 시작 시도
-        try:
-            from src.web.app import start_web_server
-            # 거래 시스템 시작
-            trading_system.start()
-            # 웹 서버 시작
-            start_web_server(trading_system, host=args.host, port=args.port)
-        except ImportError:
-            logger.error("웹 인터페이스 모듈을 찾을 수 없습니다.")
-            logger.info("웹 모듈을 설치하세요: pip install flask")
-            sys.exit(1)
-    except KeyboardInterrupt:
-        logger.info("사용자에 의해 프로그램 종료")
-    finally:
-        # 종료 시 거래 시스템 중지
-        trading_system.stop()
-        logger.info("웹 인터페이스 모드 종료")
-
-def run_daemon_mode(trading_system, args):
-    """데몬 모드 실행"""
-    logger = logging.getLogger(__name__)
-    logger.info("데몬 모드 시작")
-    
-    try:
-        # 데몬 라이브러리 로드 시도
-        try:
-            import daemon
-            import lockfile
-        except ImportError:
-            logger.error("데몬 라이브러리를 찾을 수 없습니다.")
-            logger.info("데몬 라이브러리를 설치하세요: pip install python-daemon")
-            sys.exit(1)
-        
-        # PID 파일 경로
-        pid_dir = os.path.abspath('logs')
-        os.makedirs(pid_dir, exist_ok=True)
-        pid_file = os.path.join(pid_dir, 'trading_daemon.pid')
-        
-        # 데몬 컨텍스트 설정
-        context = daemon.DaemonContext(
-            working_directory=os.path.abspath('.'),
-            umask=0o002,
-            pidfile=lockfile.FileLock(pid_file)
-        )
-        
-        # 로그 파일 설정
-        log_file = os.path.join('logs', 'daemon.log')
-        context.stdout = open(log_file, 'a+')
-        context.stderr = open(log_file, 'a+')
-        
-        # 데몬으로 실행
-        with context:
-            logger.info("데몬 모드로 거래 시스템 시작")
-            
-            # 거래 시스템 시작
-            trading_system.start()
-            
-            # 무한 루프로 실행
-            try:
-                while True:
-                    import time
-                    time.sleep(60)  # 1분마다 상태 확인
-            except Exception as e:
-                logger.error(f"데몬 모드 오류: {str(e)}")
-            finally:
-                trading_system.stop()
-                logger.info("데몬 모드 종료")
-    
-    except Exception as e:
-        logger.error(f"데몬 모드 시작 실패: {str(e)}")
-        sys.exit(1)
-
-def main():
-    """메인 함수"""
-    # 명령행 인자 파싱
-    args = parse_args()
-    
-    # 로깅 설정
-    logger = setup_logging(args.log_level)
-    logger.info(f"===== 자동 주식 거래 시스템 시작 ({args.mode} 모드) =====")
-    
-    try:
-        # 시스템 초기화
-        trading_system = initialize_system(args)
-        
-        # 모드에 따라 실행
+        # 7. 라우터 작동 (각 실행 모드에 완성된 엔진 수송)
         if args.mode == 'cli':
-            run_cli_mode(trading_system, args)
+            logger.info("정방향 CLI 단발성/실시간 매매 엔진을 가동합니다.")
+            # CLI 모드는 백그라운드 스레드를 틀 필요 없이 동기식 루프를 직접 호출하거나 start()를 사용합니다.
+            trading_system.start()
+            
+            # 메인 스레드가 즉시 죽지 않도록 대기 및 제어 루프 유지
+            try:
+                while trading_system.is_running:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                trading_system.stop()
+                
         elif args.mode == 'web':
-            run_web_mode(trading_system, args)
+            logger.info("웹 대시보드 인프라 스트림을 기동합니다.")
+            from src.modes.web_mode import run_web_mode
+            run_web_mode(trading_system)
+            
         elif args.mode == 'daemon':
-            run_daemon_mode(trading_system, args)
-        else:
-            logger.error(f"알 수 없는 모드: {args.mode}")
-            sys.exit(1)
-    
+            logger.info("백그라운드 데몬 서비스 상태로 진입합니다.")
+            from src.modes.daemon_mode import run_daemon_mode
+            run_daemon_mode(trading_system)
+            
     except Exception as e:
-        logger.error(f"실행 중 오류 발생: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.critical(f"🔥 [치명적 결함] 최상단 부트스트랩 프로세스 붕괴: {str(e)}", exc_info=True)
         sys.exit(1)
-    finally:
-        logger.info("===== 자동 주식 거래 시스템 종료 =====")
 
 if __name__ == "__main__":
     main()
