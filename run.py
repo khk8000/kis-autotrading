@@ -83,15 +83,17 @@ def run_cli_mode(args):
     sys.argv = [sys.argv[0]]
     
     # 2. main.py가 단일 실행(--once)을 하지 않고 무한 루프를 돌도록 하위 아규먼트 강제 설계
-    # 만약 main.py가 live/loop 모드를 처리하는 별도 플래그가 있다면 이 배열에 추가해 줍니다.
     if args.force:
         sys.argv.append('--force')
         os.environ["FORCE_BYPASS"] = "True"
         
-    # 만약 기존 main.py가 --once 플래그가 들어가야만 단일 실행이 되는 구조라면, 
-    # 아예 빼버림으로써 실시간 무한 루프 트레이딩 세션이 켜지게 만듭니다.
-    
-    print("🚀 [엔진 강제 전환] main.py로 무한 거래 루프 신호를 전달합니다.")
+    # ==============================================================================
+    # [최종 패치 완료] 사용자가 명령어로 지정한 전략 커스텀 타입을 main.py에 강제 바인딩
+    # ==============================================================================
+    if hasattr(args, 'strategy_type') and args.strategy_type:
+        sys.argv.extend(['--strategy-type', args.strategy_type])
+        
+    print(f"🚀 [엔진 강제 전환] main.py로 무한 거래 루프 및 {args.strategy_type} 전략 신호를 전달합니다.")
     from main import main as cli_main
     cli_main()
 
