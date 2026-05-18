@@ -1,13 +1,12 @@
 import logging
-import os
-import importlib.util
+import importlib
 
 logger = logging.getLogger(__name__)
 
 class StrategyFactory:
     """전략 팩토리 클래스
     
-    전략 유형에 따라 적절한 전략 객체를 생성하는 팩토리 클래스입니다.
+    상대 경로 오류를 원천 차단하기 위해 표준 패키지 임포트 아키텍처로 교정되었습니다.
     """
     
     @staticmethod
@@ -24,63 +23,70 @@ class StrategyFactory:
         Returns:
             Strategy: 생성된 전략 객체
         """
-        # 필요한 모듈 가져오기
-        from .basic_strategy import BasicStrategy
+        # 1. 기본 전략은 항상 안전하게 절대 경로로 로드
+        from src.strategy.basic_strategy import BasicStrategy
         
-        # 선택적 모듈 가져오기 - 모듈 존재 여부 확인
-        day_trading_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                      "day_trading_strategy.py")
-        high_frequency_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                         "high_frequency_strategy.py")
-        ml_high_frequency_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                            "ml_high_frequency_strategy.py")
-        
-        # 동적 모듈 로드
+        # 동적 로드할 전략 클래스 초기화
         DayTradingStrategy = None
         HighFrequencyStrategy = None
         MLHighFrequencyStrategy = None
         
-        if os.path.exists(day_trading_path):
-            try:
-                spec = importlib.util.spec_from_file_location("day_trading_strategy", day_trading_path)
-                day_trading_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(day_trading_module)
-                DayTradingStrategy = day_trading_module.DayTradingStrategy
-            except Exception as e:
-                logger.warning(f"일일 트레이딩 전략 모듈 로드 중 오류: {str(e)}")
+        # 2. 표준 패키지 경로를 통해 동적 임포트 (상대 경로 에러 발생하지 않음)
+        try:
+            day_trading_module = importlib.import_module("src.strategy.day_trading_strategy")
+            DayTradingStrategy = getattr(day_trading_module, "DayTradingStrategy", None)
+        except ImportError:
+            pass  # 파일이 없거나 임포트 실패 시 유연하게 통과
+        except Exception as e:
+            logger.warning(f"일일 트레이딩 전략 모듈 구문 분석 오류: {str(e)}")
+            
+        try:
+            high_frequency_module = importlib.import_module("src.strategy.high_frequency_strategy")
+            HighFrequencyStrategy = getattr(high_frequency_module, "HighFrequencyStrategy", None)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"고빈도 전략 모듈 구문 분석 오류: {str(e)}")
+            
+        try:
+            ml_high_frequency_module = importlib.import_module("src.strategy.ml_high_frequency_strategy")
+            MLHighFrequencyStrategy = getattr(ml_high_frequency_module, "MLHighFrequencyStrategy", None)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"ML 고빈도 전략 모듈 구문 분석 오류: {str(e)}")
         
-        if os.path.exists(high_frequency_path):
-            try:
-                spec = importlib.util.spec_from_file_location("high_frequency_strategy", high_frequency_path)
-                high_frequency_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(high_frequency_module)
-                HighFrequencyStrategy = high_frequency_module.HighFrequencyStrategy
-            except Exception as e:
-                logger.warning(f"고빈도 전략 모듈 로드 중 오류: {str(e)}")
+        # 3. 전략 매칭 및 생성 (대소문자 구분 없음)
+        target_mode = strategy_type.lower()
         
-        if os.path.exists(ml_high_frequency_path):
-            try:
-                spec = importlib.util.spec_from_file_location("ml_high_frequency_strategy", ml_high_frequency_path)
-                ml_high_frequency_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(ml_high_frequency_module)
-                MLHighFrequencyStrategy = ml_high_frequency_module.MLHighFrequencyStrategy
-            except Exception as e:
-                logger.warning(f"ML 고빈도 전략 모듈 로드 중 오류: {str(e)}")
-        
-        # 전략 생성 (대소문자 구분 없이 비교)
-        if strategy_type.lower() == 'basic':
-            logger.info("기본 전략을 생성합니다.")
+        if target_mode == 'basic':
+            logger.info("기본 전략(Basic Strategy)을 생성합니다.")
             return BasicStrategy(market_data, order_api, config)
-        elif strategy_type.lower() == 'day_trading' and DayTradingStrategy:
-            logger.info("일일 트레이딩 전략을 생성합니다.")
-            return DayTradingStrategy(market_data, order_api, config)
-        elif strategy_type.lower() == 'high_frequency' and HighFrequencyStrategy:
-            logger.info("고빈도 전략을 생성합니다.")
-            return HighFrequencyStrategy(market_data, order_api, config)
-        elif strategy_type.lower() == 'ml_high_frequency' and MLHighFrequencyStrategy and ml_model:
-            logger.info("ML 고빈도 전략을 생성합니다.")
-            return MLHighFrequencyStrategy(market_data, order_api, ml_model, config)
+            
+        elif target_mode == 'day_trading':
+            if DayTradingStrategy:
+                logger.info("🎯 일일 트레이딩 전략(Day Trading Strategy)을 활성화합니다.")
+                return DayTradingStrategy(market_data, order_api, config)
+            else:
+                logger.warning("일일 트레이딩 모듈 파일이 없거나 내부 오류가 있습니다. 기본 전략으로 우회합니다.")
+                return BasicStrategy(market_data, order_api, config)
+                
+        elif target_mode == 'high_frequency':
+            if HighFrequencyStrategy:
+                logger.info("⚡ 고빈도 스캘핑 전략(High Frequency Strategy)을 활성화합니다.")
+                return HighFrequencyStrategy(market_data, order_api, config)
+            else:
+                logger.warning("고빈도 스캘핑 모듈 파일이 없거나 내부 오류가 있습니다. 기본 전략으로 우회합니다.")
+                return BasicStrategy(market_data, order_api, config)
+                
+        elif target_mode == 'ml_high_frequency':
+            if MLHighFrequencyStrategy and ml_model:
+                logger.info("🤖 머신러닝 고빈도 인공지능 전략(ML High Frequency Strategy)을 활성화합니다.")
+                return MLHighFrequencyStrategy(market_data, order_api, ml_model, config)
+            else:
+                logger.warning("ML 모델이 누락되었거나 모듈 파일에 오류가 있습니다. 기본 전략으로 우회합니다.")
+                return BasicStrategy(market_data, order_api, config)
+                
         else:
-            # 기본 전략 반환
-            logger.info(f"요청한 전략 유형({strategy_type})이 유효하지 않거나 사용할 수 없습니다. 기본 전략을 사용합니다.")
+            logger.info(f"요청한 전략 유형({strategy_type})이 유효하지 않습니다. 기본 전략을 사용합니다.")
             return BasicStrategy(market_data, order_api, config)
