@@ -78,9 +78,20 @@ def setup_logging():
     )
 
 def run_cli_mode(args):
-    """CLI 모드 실행 (main.py의 서브파서 간섭 우회 전달)"""
-    if len(sys.argv) > 1 and sys.argv[1] == 'cli':
-        sys.argv.pop(1)
+    """CLI 모드 실행 (main.py의 서브파서 간섭 우회 및 실시간 루프 강제 주입)"""
+    # 1. 기존 인자 찌꺼기를 완전히 초기화합니다.
+    sys.argv = [sys.argv[0]]
+    
+    # 2. main.py가 단일 실행(--once)을 하지 않고 무한 루프를 돌도록 하위 아규먼트 강제 설계
+    # 만약 main.py가 live/loop 모드를 처리하는 별도 플래그가 있다면 이 배열에 추가해 줍니다.
+    if args.force:
+        sys.argv.append('--force')
+        os.environ["FORCE_BYPASS"] = "True"
+        
+    # 만약 기존 main.py가 --once 플래그가 들어가야만 단일 실행이 되는 구조라면, 
+    # 아예 빼버림으로써 실시간 무한 루프 트레이딩 세션이 켜지게 만듭니다.
+    
+    print("🚀 [엔진 강제 전환] main.py로 무한 거래 루프 신호를 전달합니다.")
     from main import main as cli_main
     cli_main()
 
