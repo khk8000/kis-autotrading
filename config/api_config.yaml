@@ -1,8 +1,0 @@
-api:
-  # 실전투자인 경우: https://openapi.koreainvestment.com:9443
-  # 모의투자인 경우: https://openapivts.koreainvestment.com:29443
-  base_url: "https://openapivts.koreainvestment.com:29443"
-  
-  app_key: "LOADED_FROM_COLAB_SECRETS"
-  app_secret: "LOADED_FROM_COLAB_SECRETS"
-  account_no: "LOADED_FROM_COLAB_SECRETS"
