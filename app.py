@@ -180,6 +180,35 @@ with tab_positions:
         positions_list = account_data.get('positions', [])
         if positions_list:
             df_positions = pd.DataFrame(positions_list)
+            
+            # ------------------------------------------------------------------
+            # 🔥 [실시간 포지션 뷰어 연산 가드레일 삽입] 
+            # 주당 매매가(매입단가)와 현재가격의 차이를 반영하여 평가손익 강제 교정
+            # ------------------------------------------------------------------
+            try:
+                # 데이터 타입이 문자열로 유입될 경우를 대비해 정수형/실수형 변환 처리
+                qty = pd.to_numeric(df_positions['보유수량'], errors='coerce').fillna(0)
+                buy_p = pd.to_numeric(df_positions['매입단가'], errors='coerce').fillna(0)
+                
+                # API 응답 필드 형태에 맞춰 '현재가' 데이터 바인딩 가드 설정
+                if '현재가' in df_positions.columns:
+                    curr_p = pd.to_numeric(df_positions['현재가'], errors='coerce').fillna(0)
+                elif 'prpr' in df_positions.columns:
+                    curr_p = pd.to_numeric(df_positions['prpr'], errors='coerce').fillna(0)
+                    df_positions['현재가'] = curr_p  # 뷰어 컬럼명 통일
+                else:
+                    curr_p = buy_p  # 현재가 필드 유실 시 에러 방지용 가드
+                
+                # 🎯 정방향 공식 적용: 평가손익 = (현재가 - 매입단가) * 보유수량
+                df_positions['평가손익'] = (curr_p - buy_p) * qty
+                
+                # 가독성을 위해 소수점 버림 처리 및 정수형 변환
+                df_positions['평가손익'] = df_positions['평가손익'].astype(int)
+                
+            except Exception as eval_err:
+                logger.error(f"실시간 포지션 손익 텔레메트리 연산 오류: {str(eval_err)}")
+            # ------------------------------------------------------------------
+
             st.dataframe(df_positions, use_container_width=True)
         else:
             st.info("📥 현재 가동 중인 포지션이 비어 있습니다. 자동매매 시그널을 대기하십시오.")
