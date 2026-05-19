@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>종목 선정 원리 - 주식 자동매매 시스템</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- 마크다운 렌더링을 위한 CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.1.0/github-markdown.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/styles/github.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/lib/highlight.min.js"></script>
+    <style>
+        .markdown-body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        @media (max-width: 767px) {
+            .markdown-body {
+                padding: 15px;
+            }
+        }
+        
+        /* 서브섹션 들여쓰기 */
+        .markdown-body h3, .markdown-body h4 {
+            margin-top: 1.5em;
+        }
+        
+        /* 이미지 및 테이블 스타일 */
+        .markdown-body img {
+            max-width: 100%;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        /* 코드 블록 */
+        .markdown-body pre {
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            padding: 16px;
+            overflow: auto;
+        }
+        
+        /* 마지막 포지션을 위한 공간 */
+        .markdown-body { 
+            margin-bottom: 50px;
+        }
+        
+        /* 테이블 스타일 개선 */
+        .markdown-body table {
+            width: 100%;
+            margin-bottom: 20px;
+            border-collapse: collapse;
+        }
+        .markdown-body table th {
+            background-color: #f0f6ff;
+            font-weight: bold;
+        }
+        .markdown-body table th, .markdown-body table td {
+            padding: 8px 12px !important;
+            border: 1px solid #e9ecef !important;
+        }
+        .markdown-body table tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">주식 자동매매 시스템</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/dashboard">대시보드</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/settings">설정</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/logs">로그</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/stock_selection">종목 선정 원리</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <!-- 마크다운 내용 -->
+            <div class="col-12">
+                <div class="markdown-body" id="markdown-content">
+                    <!-- 마크다운 콘텐츠가 JavaScript로 렌더링됩니다 -->
+                </div>
+                
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        try {
+                            // 마크다운 콘텐츠를 가져와서 파싱
+                            const markdownContent = "{{ markdown_content|safe }}";
+                            
+                            // 이스케이프된 문자열을 다시 원래 형태로 변환
+                            const decodedContent = markdownContent.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+                            
+                            // 마크다운 옵션 설정
+                            const renderer = new marked.Renderer();
+                            
+                            // 헤딩 렌더러 커스텀화 - ID 추가
+                            renderer.heading = function(text, level) {
+                                if (text && typeof text === 'string') {
+                                    // 한글, 영문, 숫자, 하이픈만 포함하는 ID 생성
+                                    let id = text.toLowerCase()
+                                        .replace(/[^\w\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\-]/g, '-')
+                                        .replace(/\-+/g, '-')
+                                        .replace(/^\-+/g, '')
+                                        .replace(/\-+$/g, '');
+                                    
+                                    return `<h${level} id="${id}">${text}</h${level}>`;
+                                } else {
+                                    return `<h${level}>제목</h${level}>`;
+                                }
+                            };
+                            
+                            marked.setOptions({
+                                renderer: renderer,
+                                highlight: function(code, lang) {
+                                    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                                    return hljs.highlight(code, { language }).value;
+                                },
+                                langPrefix: 'hljs language-',
+                                gfm: true,
+                                breaks: false,
+                                pedantic: false,
+                                sanitize: false,
+                                smartLists: true,
+                                smartypants: false
+                            });
+                            
+                            // 마크다운을 HTML로 변환
+                            if (decodedContent && decodedContent.trim().length > 0) {
+                                try {
+                                    const parsedContent = marked.parse(decodedContent);
+                                    document.getElementById('markdown-content').innerHTML = parsedContent;
+                                    
+                                    // 코드 하이라이팅 적용
+                                    document.querySelectorAll('pre code').forEach((block) => {
+                                        hljs.highlightElement(block);
+                                    });
+                                } catch (parseError) {
+                                    console.error("Error parsing markdown:", parseError);
+                                    document.getElementById('markdown-content').innerHTML = `
+                                        <div class="alert alert-warning">
+                                            <h4>마크다운 파싱 중 오류가 발생했습니다</h4>
+                                            <p>오류 메시지: ${parseError.message}</p>
+                                        </div>`;
+                                }
+                            } else {
+                                document.getElementById('markdown-content').innerHTML = `
+                                    <div class="alert alert-warning">
+                                        <h4>마크다운 콘텐츠를 가져올 수 없습니다.</h4>
+                                        <p>마크다운 파일이 존재하는지 확인해주세요.</p>
+                                    </div>`;
+                            }
+                        } catch (error) {
+                            console.error("Error rendering markdown:", error);
+                            document.getElementById('markdown-content').innerHTML = `
+                                <div class="alert alert-danger">
+                                    <h4>렌더링 중 오류가 발생했습니다.</h4>
+                                    <p>오류 메시지: ${error.message}</p>
+                                </div>`;
+                        }
+                    });
+                </script>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer mt-auto py-3 bg-light">
+        <div class="container text-center">
+            <span class="text-muted">자동매매 시스템 &copy; 2025</span>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
