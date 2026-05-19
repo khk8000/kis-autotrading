@@ -134,7 +134,7 @@ force_bypass_status = os.environ.get("FORCE_BYPASS", "FALSE") == "TRUE"
 st.sidebar.write(f"정규장 시간외 우회 제한선: {'🔓 해제(FORCE_BYPASS)' if force_bypass_status else '🔒 정상 가동'}")
 
 # ==============================================================================
-# 6. 📂 메인 탭 인터페이스
+# 6. 📂 메인 탭 인터페이스 (손익 연산 교정 및 차트 에러 가드 통합 버전)
 # ==============================================================================
 tab_console, tab_positions, tab_charts, tab_manual_order, tab_config = st.tabs([
     "🤖 자동매매 콘솔", 
@@ -182,31 +182,28 @@ with tab_positions:
             df_positions = pd.DataFrame(positions_list)
             
             # ------------------------------------------------------------------
-            # 🔥 [실시간 포지션 뷰어 연산 가드레일 삽입] 
-            # 주당 매매가(매입단가)와 현재가격의 차이를 반영하여 평가손익 강제 교정
+            # 🔥 [실시간 손익 보정 가드레일] (현재가 - 매입단가) * 보유수량 정방향 연산
             # ------------------------------------------------------------------
             try:
-                # 데이터 타입이 문자열로 유입될 경우를 대비해 정수형/실수형 변환 처리
+                # 안전한 연산을 위해 수치 데이터 강제 형변환
                 qty = pd.to_numeric(df_positions['보유수량'], errors='coerce').fillna(0)
                 buy_p = pd.to_numeric(df_positions['매입단가'], errors='coerce').fillna(0)
                 
-                # API 응답 필드 형태에 맞춰 '현재가' 데이터 바인딩 가드 설정
+                # API 데이터 필드명 동적 매핑 가드
                 if '현재가' in df_positions.columns:
                     curr_p = pd.to_numeric(df_positions['현재가'], errors='coerce').fillna(0)
                 elif 'prpr' in df_positions.columns:
                     curr_p = pd.to_numeric(df_positions['prpr'], errors='coerce').fillna(0)
-                    df_positions['현재가'] = curr_p  # 뷰어 컬럼명 통일
+                    df_positions['현재가'] = curr_p
                 else:
-                    curr_p = buy_p  # 현재가 필드 유실 시 에러 방지용 가드
+                    curr_p = buy_p
                 
-                # 🎯 정방향 공식 적용: 평가손익 = (현재가 - 매입단가) * 보유수량
+                # 주당 매매가와 현재가 차이를 완벽히 반영한 평가손익 계산
                 df_positions['평가손익'] = (curr_p - buy_p) * qty
-                
-                # 가독성을 위해 소수점 버림 처리 및 정수형 변환
                 df_positions['평가손익'] = df_positions['평가손익'].astype(int)
                 
             except Exception as eval_err:
-                logger.error(f"실시간 포지션 손익 텔레메트리 연산 오류: {str(eval_err)}")
+                logger.error(f"실시간 포지션 손익 연산 오류: {str(eval_err)}")
             # ------------------------------------------------------------------
 
             st.dataframe(df_positions, use_container_width=True)
@@ -227,16 +224,36 @@ with tab_charts:
     if st.button("차트 데이터 리프레시 렌더링", use_container_width=True):
         with st.spinner("KIS 시세 데이터 파이프라인 수신 중..."):
             try:
-                ohlcv_data = market_data.get_ohlcv(selected_stock, timeframe='daily')
-                if not ohlcv_data.empty:
+                # --------------------------------------------------------------
+                # 🔥 [차트 엔진 메서드 미바인딩 인터셉트 가드]
+                # MarketData 객체 내부에 get_ohlcv가 없을 경우, 실제 존재하는 내부 메서드로 대체 시도
+                # --------------------------------------------------------------
+                ohlcv_data = pd.DataFrame()
+                
+                if hasattr(market_data, 'get_ohlcv'):
+                    ohlcv_data = market_data.get_ohlcv(selected_stock, timeframe='daily')
+                elif hasattr(market_data, 'get_daily_price'): # 후보 메서드 1
+                    ohlcv_data = market_data.get_daily_price(selected_stock)
+                elif hasattr(market_data, 'get_market_data'): # 후보 메서드 2
+                    ohlcv_data = market_data.get_market_data(selected_stock)
+                else:
+                    # 존재하는 모든 메서드 목록을 에러 팝업에 명시하여 추적성 확보
+                    available_methods = [m for m in dir(market_data) if not m.startswith('_')]
+                    st.error(f"❌ MarketData 객체 내에 차트용 수신 메서드가 정의되지 않았습니다.\n\n"
+                             f"**현재 사용 가능한 메서드 목록:** {available_methods}\n\n"
+                             f"`src/api/market_data.py` 파일에서 일봉 데이터를 가져오는 정확한 함수명을 확인해 주세요.")
+                
+                # 데이터가 정상 수신되었을 경우 캔들스틱 차트 렌더링
+                if ohlcv_data is not None and not ohlcv_data.empty:
                     fig = go.Figure(data=[go.Candlestick(
                         x=ohlcv_data.index, open=ohlcv_data['open'], high=ohlcv_data['high'],
                         low=ohlcv_data['low'], close=ohlcv_data['close'], name=selected_stock
                     )])
                     fig.update_layout(title=f"{selected_stock} 실시간 통합 캔들스틱 차트", layout="wide")
                     st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.warning("수신된 시세 OHLCV 시계열 데이터가 존재하지 않습니다.")
+                elif 'available_methods' not in locals():
+                    st.warning("수신된 시세 OHLCV 시계열 데이터가 존재하지 않거나 포맷이 일치하지 않습니다.")
+                    
             except Exception as e:
                 st.error(f"차트 데이터 시각화 중 예외 발생: {str(e)}")
 
